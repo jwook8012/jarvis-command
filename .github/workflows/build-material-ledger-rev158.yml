@@ -1,0 +1,62 @@
+name: Build Material Ledger Rev1.5.8 (Portable Windows)
+on:
+  push:
+    branches: [ material-ledger-rev158 ]
+    paths:
+      - 'material-ledger-rev158/**'
+      - '.github/workflows/build-material-ledger-rev158.yml'
+  workflow_dispatch:
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install Python dependencies on build runner only
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pymupdf pytesseract pillow numpy openpyxl
+      - name: Install Tesseract on builder, not on user's PC
+        shell: pwsh
+        run: |
+          choco install tesseract -y --no-progress
+          $possible = @("C:\Program Files\Tesseract-OCR", "C:\tools\tesseract", "C:\Program Files (x86)\Tesseract-OCR")
+          $tess = $possible | Where-Object { Test-Path (Join-Path $_ "tesseract.exe") } | Select-Object -First 1
+          if (-not $tess) { throw "Tesseract installation not found" }
+          "TESSERACT_HOME=$tess" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & (Join-Path $tess "tesseract.exe") --version
+      - name: Download official Korean and English OCR models
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:TESSERACT_HOME "tessdata"
+          New-Item -ItemType Directory -Path $d -Force | Out-Null
+          Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/kor.traineddata" -OutFile (Join-Path $d "kor.traineddata")
+          Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" -OutFile (Join-Path $d "eng.traineddata")
+      - name: Build GUI executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name "MaterialLedger_Rev1_5_8" --collect-all fitz material-ledger-rev158/ledger158.py
+          New-Item -ItemType Directory -Force "dist/MaterialLedger_Rev1_5_8/tesseract" | Out-Null
+          Copy-Item -Path "$env:TESSERACT_HOME\*" -Destination "dist/MaterialLedger_Rev1_5_8/tesseract" -Recurse -Force
+          $models = Get-ChildItem "dist/MaterialLedger_Rev1_5_8/tesseract/tessdata" -File
+          foreach ($m in $models) { if ($m.Name -notin @('kor.traineddata','eng.traineddata','osd.traineddata')) { Remove-Item $m.FullName -Force } }
+          "Portable Windows 64-bit, no Python or Tesseract installation required. Choose the existing XLSM template in the app for first run. This is an unsigned test build." | Out-File -FilePath "dist/MaterialLedger_Rev1_5_8/README.txt" -Encoding utf8
+      - name: Verify OCR runtime folder
+        shell: pwsh
+        run: |
+          $p="dist/MaterialLedger_Rev1_5_8/tesseract"
+          if (-not (Test-Path "$p/tesseract.exe")) { throw "missing tesseract.exe" }
+          if (-not (Test-Path "$p/tessdata/kor.traineddata")) { throw "missing kor.traineddata" }
+          if (-not (Test-Path "dist/MaterialLedger_Rev1_5_8/MaterialLedger_Rev1_5_8.exe")) { throw "missing EXE" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaterialLedger_Rev1_5_8_WindowsPortable
+          path: dist/MaterialLedger_Rev1_5_8/
+          retention-days: 7
